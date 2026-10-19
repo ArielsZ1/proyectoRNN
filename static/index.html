@@ -1,0 +1,366 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Transcriptor y traductor RNN</title>
+<style>
+  :root{--bg:#f4f6fb;--card:#fff;--text:#1c2333;--muted:#667085;--primary:#4f46e5;--primary-d:#4338ca;--border:#e4e7ee;--ok:#16a34a;--err:#dc2626;--soft:#eef0ff}
+  @media (prefers-color-scheme:dark){:root{--bg:#0f1220;--card:#181c2e;--text:#e8eaf3;--muted:#98a2b3;--border:#2a3050;--soft:#222850}}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text)}
+  header{padding:24px 16px 8px;max-width:920px;margin:0 auto}
+  h1{margin:0 0 4px;font-size:1.6rem}
+  header p{margin:0;color:var(--muted)}
+  nav{display:flex;gap:8px;max-width:920px;margin:16px auto 0;padding:0 16px;flex-wrap:wrap}
+  nav button{background:var(--card);color:var(--text);border:1px solid var(--border);padding:10px 18px;border-radius:999px;cursor:pointer;font-size:.95rem}
+  nav button.active{background:var(--primary);border-color:var(--primary);color:#fff}
+  main{max-width:920px;margin:0 auto;padding:16px}
+  .tab{display:none}.tab.active{display:block}
+  .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px;margin-bottom:16px}
+  .card h2{margin:0 0 12px;font-size:1.05rem}
+  .row{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+  input[type=text],input[type=number],select,textarea{background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:9px 10px;font:inherit}
+  input[type=text]{flex:1;min-width:180px}
+  input[type=number]{width:90px}
+  textarea{width:100%;min-height:90px;resize:vertical}
+  input[type=file]{max-width:100%}
+  button.btn{background:var(--primary);color:#fff;border:0;border-radius:8px;padding:9px 16px;font:inherit;cursor:pointer}
+  button.btn:hover:not(:disabled){background:var(--primary-d)}
+  button.btn:disabled{opacity:.5;cursor:not-allowed}
+  button.btn.sec{background:transparent;color:var(--text);border:1px solid var(--border)}
+  .muted{color:var(--muted);font-size:.9rem}
+  .msg{font-size:.9rem;min-height:1.2em;margin-top:4px}
+  .msg.err,.status.err{color:var(--err)}.msg.ok{color:var(--ok)}
+  .bar{height:10px;background:var(--bg);border:1px solid var(--border);border-radius:999px;overflow:hidden;margin:6px 0}
+  .bar span{display:block;height:100%;width:0;background:var(--primary);transition:width .3s}
+  table{width:100%;border-collapse:collapse;font-size:.88rem;margin-top:8px}
+  th,td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--border)}
+  th:first-child,td:first-child{text-align:left}
+  .result{background:var(--soft);border-radius:10px;padding:12px;margin-top:10px;display:none}
+  .result .text{font-size:1.1rem;white-space:pre-wrap;word-break:break-word}
+  .preview img{max-width:100%;max-height:140px;border:1px solid var(--border);border-radius:8px;margin-top:8px}
+  .preview audio{width:100%;margin-top:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>Transcriptor y traductor RNN</h1>
+  <p>Manuscrito &rarr; texto, audio &rarr; texto y traducci&oacute;n con redes recurrentes.</p>
+</header>
+<nav>
+  <button class="active" data-tab="handwriting">Manuscrito</button>
+  <button data-tab="audio">Audio</button>
+  <button data-tab="translation">Traducci&oacute;n</button>
+</nav>
+<main>
+
+<!-- ===== MANUSCRITO ===== -->
+<section class="tab active" id="tab-handwriting">
+  <div class="card">
+    <h2>1. Dataset</h2>
+    <div class="row">
+      <input type="file" id="handwriting-file" accept="image/*">
+      <input type="text" id="handwriting-text" placeholder="Transcripci&oacute;n exacta (una palabra o l&iacute;nea corta)">
+      <button class="btn" onclick="addSample('handwriting')">Agregar muestra</button>
+    </div>
+    <div class="row"><span class="muted" id="handwriting-count">Muestras: 0 (m&iacute;nimo 10)</span>
+      <button class="btn sec" onclick="clearData('handwriting')">Vaciar dataset</button></div>
+    <div class="msg" id="handwriting-msg"></div>
+  </div>
+  <div class="card">
+    <h2>2. Entrenamiento</h2>
+    <div class="row"><label>&Eacute;pocas <input type="number" id="handwriting-epochs" min="1" max="200" value="10"></label>
+      <button class="btn train-btn" onclick="startTrain('handwriting')">Entrenar</button></div>
+    <div class="bar"><span id="bar-handwriting"></span></div>
+    <div class="status muted" id="status-handwriting"></div>
+    <table id="hist-handwriting"><thead><tr><th>&Eacute;poca</th><th>P&eacute;rdida</th><th>P&eacute;rdida val.</th><th>CER val.</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card">
+    <h2>3. Predicci&oacute;n</h2>
+    <div class="row"><input type="file" id="handwriting-pfile" accept="image/*">
+      <button class="btn" onclick="predict('handwriting')">Transcribir</button></div>
+    <div class="preview" id="handwriting-preview"></div>
+    <div class="msg" id="handwriting-pmsg"></div>
+    <div class="result" id="handwriting-result">
+      <div class="text" id="handwriting-out"></div>
+      <div class="muted" id="handwriting-conf"></div>
+      <div class="row" style="margin-top:8px"><button class="btn sec" onclick="sendToTranslate('handwriting')">Traducir este texto</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== AUDIO ===== -->
+<section class="tab" id="tab-audio">
+  <div class="card">
+    <h2>1. Dataset</h2>
+    <div class="row">
+      <input type="file" id="audio-file" accept=".wav,audio/wav">
+      <input type="text" id="audio-text" placeholder="Transcripci&oacute;n exacta del audio">
+      <button class="btn" onclick="addSample('audio')">Agregar muestra</button>
+    </div>
+    <div class="muted">WAV PCM 16 bits, 16 kHz, hasta ~8 s por clip.</div>
+    <div class="row" style="margin-top:8px"><span class="muted" id="audio-count">Muestras: 0 (m&iacute;nimo 10)</span>
+      <button class="btn sec" onclick="clearData('audio')">Vaciar dataset</button></div>
+    <div class="msg" id="audio-msg"></div>
+  </div>
+  <div class="card">
+    <h2>2. Entrenamiento</h2>
+    <div class="row"><label>&Eacute;pocas <input type="number" id="audio-epochs" min="1" max="200" value="10"></label>
+      <button class="btn train-btn" onclick="startTrain('audio')">Entrenar</button></div>
+    <div class="bar"><span id="bar-audio"></span></div>
+    <div class="status muted" id="status-audio"></div>
+    <table id="hist-audio"><thead><tr><th>&Eacute;poca</th><th>P&eacute;rdida</th><th>P&eacute;rdida val.</th><th>CER val.</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card">
+    <h2>3. Predicci&oacute;n</h2>
+    <div class="row"><input type="file" id="audio-pfile" accept=".wav,audio/wav">
+      <button class="btn" onclick="predict('audio')">Transcribir</button></div>
+    <div class="preview" id="audio-preview"></div>
+    <div class="msg" id="audio-pmsg"></div>
+    <div class="result" id="audio-result">
+      <div class="text" id="audio-out"></div>
+      <div class="muted" id="audio-conf"></div>
+      <div class="row" style="margin-top:8px"><button class="btn sec" onclick="sendToTranslate('audio')">Traducir este texto</button></div>
+    </div>
+  </div>
+</section>
+
+<!-- ===== TRADUCCION ===== -->
+<section class="tab" id="tab-translation">
+  <div class="card">
+    <h2>1. Pares de idiomas</h2>
+    <div class="row"><select id="pair-select"></select>
+      <button class="btn sec" onclick="deletePair()">Eliminar par</button></div>
+    <div class="row">
+      <input type="text" id="pair-name" placeholder="Nombre del par nuevo (ej. en-es)">
+      <input type="file" id="pair-file" accept=".tsv,.txt">
+      <button class="btn" onclick="uploadCorpus()">Cargar corpus</button>
+    </div>
+    <div class="muted">Formato: una l&iacute;nea por par, <code>origen&lt;TAB&gt;destino</code>.</div>
+    <div class="msg" id="translation-msg"></div>
+  </div>
+  <div class="card">
+    <h2>2. Entrenamiento</h2>
+    <div class="row"><label>&Eacute;pocas <input type="number" id="translation-epochs" min="1" max="200" value="10"></label>
+      <button class="btn train-btn" onclick="startTrain('translation')">Entrenar</button></div>
+    <div class="bar"><span id="bar-translation"></span></div>
+    <div class="status muted" id="status-translation"></div>
+    <table id="hist-translation"><thead><tr><th>&Eacute;poca</th><th>P&eacute;rdida</th><th>P&eacute;rdida val.</th><th>Precisi&oacute;n val.</th></tr></thead><tbody></tbody></table>
+  </div>
+  <div class="card">
+    <h2>3. Traducci&oacute;n</h2>
+    <textarea id="tr-input" placeholder="Escribe el texto a traducir..."></textarea>
+    <div class="row" style="margin-top:8px"><button class="btn" onclick="doTranslate()">Traducir</button></div>
+    <div class="msg" id="translation-pmsg"></div>
+    <div class="result" id="tr-result"><div class="text" id="tr-output"></div></div>
+  </div>
+</section>
+
+</main>
+<script>
+const $ = (s) => document.querySelector(s);
+const TASKS = ['handwriting', 'audio', 'translation'];
+const FIELD = { handwriting: 'image', audio: 'audio' };
+const lastText = {};
+let lastStatus = 'idle';
+
+async function api(url, opts = {}) {
+  const r = await fetch(url, opts);
+  let d = {};
+  try { d = await r.json(); } catch (e) {}
+  if (!r.ok) throw new Error(d.error || ('Error ' + r.status));
+  return d;
+}
+function msg(id, text, isErr) {
+  const el = $('#' + id);
+  el.textContent = text || '';
+  el.className = 'msg ' + (text ? (isErr ? 'err' : 'ok') : '');
+}
+
+// ---- Pestanas ----
+function showTab(name) {
+  document.querySelectorAll('nav button').forEach(b => b.classList.toggle('active', b.dataset.tab === name));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
+}
+document.querySelectorAll('nav button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+
+// ---- Resumen ----
+async function refresh() {
+  try {
+    const o = await api('/api/overview');
+    ['handwriting', 'audio'].forEach(t => {
+      const i = o[t];
+      $('#' + t + '-count').textContent =
+        `Muestras: ${i.samples} (mínimo ${i.min_samples}) · ${i.trained ? 'modelo entrenado' : 'sin modelo'}`;
+    });
+    const sel = $('#pair-select'), prev = sel.value;
+    sel.innerHTML = '';
+    if (!o.translation.length) {
+      const op = document.createElement('option');
+      op.textContent = '(sin pares cargados)'; op.value = ''; sel.appendChild(op);
+    }
+    o.translation.forEach(p => {
+      const op = document.createElement('option');
+      op.value = p.name;
+      op.textContent = `${p.name} · ${p.pairs} pares · ${p.trained ? 'entrenado' : 'sin entrenar'}`;
+      sel.appendChild(op);
+    });
+    if (prev) sel.value = prev;
+  } catch (e) { /* servidor no disponible */ }
+}
+
+// ---- Dataset ----
+async function addSample(task) {
+  const file = $('#' + task + '-file').files[0];
+  const text = $('#' + task + '-text').value.trim();
+  if (!file || !text) return msg(task + '-msg', 'Selecciona un archivo y escribe su transcripción.', true);
+  const fd = new FormData();
+  fd.append(FIELD[task], file);
+  fd.append('text', text);
+  try {
+    await api(`/api/${task}/samples`, { method: 'POST', body: fd });
+    $('#' + task + '-text').value = '';
+    $('#' + task + '-file').value = '';
+    msg(task + '-msg', 'Muestra agregada.');
+    refresh();
+  } catch (e) { msg(task + '-msg', e.message, true); }
+}
+async function clearData(task) {
+  if (!confirm('¿Eliminar todas las muestras de este dataset?')) return;
+  try { await api(`/api/${task}/samples`, { method: 'DELETE' }); msg(task + '-msg', 'Dataset vaciado.'); refresh(); }
+  catch (e) { msg(task + '-msg', e.message, true); }
+}
+
+// ---- Traduccion: corpus ----
+async function uploadCorpus() {
+  const file = $('#pair-file').files[0];
+  const pair = $('#pair-name').value.trim() || $('#pair-select').value;
+  if (!file || !pair) return msg('translation-msg', 'Indica un nombre de par y un archivo TSV.', true);
+  const fd = new FormData();
+  fd.append('file', file);
+  fd.append('pair', pair);
+  try {
+    const d = await api('/api/translation/corpus', { method: 'POST', body: fd });
+    msg('translation-msg', `Se agregaron ${d.added} pares.`);
+    $('#pair-name').value = ''; $('#pair-file').value = '';
+    refresh();
+  } catch (e) { msg('translation-msg', e.message, true); }
+}
+async function deletePair() {
+  const pair = $('#pair-select').value;
+  if (!pair || !confirm(`¿Eliminar el par "${pair}" y su modelo?`)) return;
+  try { await api('/api/translation/' + encodeURIComponent(pair), { method: 'DELETE' }); refresh(); }
+  catch (e) { msg('translation-msg', e.message, true); }
+}
+
+// ---- Entrenamiento ----
+async function startTrain(task) {
+  const epochs = parseInt($('#' + task + '-epochs').value, 10);
+  const body = { epochs };
+  if (task === 'translation') body.pair = $('#pair-select').value;
+  try {
+    await api('/api/train/' + task, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+    });
+    pollStatus();
+  } catch (e) {
+    const el = $('#status-' + task);
+    el.textContent = 'Error: ' + e.message; el.className = 'status err';
+  }
+}
+const fmt = (v) => (v === undefined || v === null) ? '–' : Number(v).toFixed(4);
+
+function renderStatus(st) {
+  const training = st.status === 'training';
+  document.querySelectorAll('.train-btn').forEach(b => b.disabled = training);
+  TASKS.forEach(t => {
+    const own = st.task === t;
+    $('#bar-' + t).style.width = own ? st.progress + '%' : '0%';
+    let label = 'Sin entrenamiento en curso.', isErr = false;
+    if (own) {
+      if (st.status === 'training') label = `Entrenando… época ${st.epoch}/${st.epochs}`;
+      else if (st.status === 'done') label = 'Entrenamiento terminado.';
+      else if (st.status === 'error') { label = 'Error: ' + st.error; isErr = true; }
+    } else if (training) label = `Hay otro entrenamiento en curso (${st.task}).`;
+    const el = $('#status-' + t);
+    el.textContent = label;
+    el.className = 'status ' + (isErr ? 'err' : 'muted');
+    const tb = $(`#hist-${t} tbody`);
+    tb.innerHTML = '';
+    if (own) st.history.forEach(h => {
+      const tr = document.createElement('tr');
+      [h.epoch, fmt(h.loss), fmt(h.val_loss), fmt(h.val_cer !== undefined ? h.val_cer : h.val_accuracy)]
+        .forEach(v => { const td = document.createElement('td'); td.textContent = v; tr.appendChild(td); });
+      tb.appendChild(tr);
+    });
+  });
+}
+async function pollStatus() {
+  try {
+    const st = await api('/api/status');
+    renderStatus(st);
+    if (lastStatus === 'training' && st.status !== 'training') refresh();
+    lastStatus = st.status;
+  } catch (e) { /* ignorar */ }
+}
+
+// ---- Prediccion ----
+['handwriting', 'audio'].forEach(t => {
+  $('#' + t + '-pfile').onchange = (ev) => {
+    const f = ev.target.files[0], box = $('#' + t + '-preview');
+    box.innerHTML = '';
+    if (!f) return;
+    const el = document.createElement(t === 'audio' ? 'audio' : 'img');
+    el.src = URL.createObjectURL(f);
+    if (t === 'audio') el.controls = true;
+    box.appendChild(el);
+  };
+});
+async function predict(task) {
+  const file = $('#' + task + '-pfile').files[0];
+  if (!file) return msg(task + '-pmsg', 'Selecciona un archivo.', true);
+  const fd = new FormData();
+  fd.append(FIELD[task], file);
+  msg(task + '-pmsg', 'Procesando…');
+  try {
+    const d = await api(`/api/${task}/predict`, { method: 'POST', body: fd });
+    msg(task + '-pmsg', '');
+    lastText[task] = d.text;
+    $('#' + task + '-out').textContent = d.text || '(sin texto reconocido)';
+    $('#' + task + '-conf').textContent = 'Confianza aproximada: ' + Math.round(d.confidence * 100) + ' %';
+    $('#' + task + '-result').style.display = 'block';
+  } catch (e) {
+    $('#' + task + '-result').style.display = 'none';
+    msg(task + '-pmsg', e.message, true);
+  }
+}
+function sendToTranslate(task) {
+  $('#tr-input').value = lastText[task] || '';
+  showTab('translation');
+}
+async function doTranslate() {
+  const text = $('#tr-input').value.trim(), pair = $('#pair-select').value;
+  if (!pair) return msg('translation-pmsg', 'Selecciona o carga un par de idiomas.', true);
+  if (!text) return msg('translation-pmsg', 'Escribe un texto.', true);
+  msg('translation-pmsg', 'Traduciendo…');
+  try {
+    const d = await api('/api/translate', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ pair, text })
+    });
+    msg('translation-pmsg', '');
+    $('#tr-output').textContent = d.text;
+    $('#tr-result').style.display = 'block';
+  } catch (e) {
+    $('#tr-result').style.display = 'none';
+    msg('translation-pmsg', e.message, true);
+  }
+}
+
+refresh();
+pollStatus();
+setInterval(pollStatus, 1000);
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+.venv/
+__pycache__/
+*.py[cod]
+
+# Audio de entrenamiento: puede contener grabaciones personales.
+data/audio/
+
+# Modelos creados localmente durante el entrenamiento.
+models/audio/
+models/handwriting/
